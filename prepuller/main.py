@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+from kubernetes import client, config
+from kubernetes.config.config_exception import ConfigException
+
+
+def standalone():
+    try:
+        config.load_incluster_config()
+    except ConfigException:
+        config.load_kube_config()
+    v1 = client.CoreV1Api()
+    print("Listing pods with their IPs:")
+    ret = v1.list_pod_for_all_namespaces(watch=False)
+    for i in ret.items:
+        print("%s\t%s\t%s" %
+              (i.status.pod_ip, i.metadata.namespace, i.metadata.name))
+
+
+if __name__ == "__main__":
+    standalone()

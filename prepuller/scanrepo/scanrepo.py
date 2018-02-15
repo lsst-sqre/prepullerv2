@@ -2,6 +2,7 @@
 """
 import datetime
 import json
+import logging
 import urllib.parse
 import urllib.request
 
@@ -16,6 +17,7 @@ class ScanRepo(object):
     path = ''
     owner = ''
     name = ''
+    port = None
     data = {}
     debug = False
     json = False
@@ -24,11 +26,16 @@ class ScanRepo(object):
     dailies = 3
     weeklies = 2
     releases = 1
+    logger = None
 
     def __init__(self, host='', path='', owner='', name='',
                  dailies=3, weeklies=2, releases=1,
-                 json=False,
+                 json=False, port=None,
                  insecure=False, sort_field="", debug=False):
+        logging.basicConfig()
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        self.logger.setLevel(logging.INFO)
         if host:
             self.host = host
         if path:
@@ -53,10 +60,16 @@ class ScanRepo(object):
             self.sort_field = sort_field
         if debug:
             self.debug = debug
+            self.logger.setLevel(logging.DEBUG)
+            self.logger.debug("Debug logging on.")
+        exthost = self.host
+        if port:
+            exthost += ":" + str(port)
         if not self.path:
             self.path = ("/v2/repositories/" + self.owner + "/" +
-                         self.name + "/tags")
-        self.url = protocol + "://" + self.host + self.path
+                         self.name + "/tags/")
+        self.url = protocol + "://" + exthost + self.path
+        self.logger.debug("URL %s" % self.url)
 
     def __enter__(self):
         return self

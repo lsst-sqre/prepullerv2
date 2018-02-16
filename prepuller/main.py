@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import shlex
 from .prepuller import Prepuller
 
 
@@ -7,8 +8,9 @@ def standalone():
     args = parse_args()
     prepuller = Prepuller(args=args)
     prepuller.update_images_from_repo()
-    prepuller.build_daemonset_specs()
-    print(prepuller.daemonset_specs)
+    prepuller.build_nodelist()
+    prepuller.build_pod_specs()
+    prepuller.run_pods()
 
 
 def parse_args():
@@ -18,8 +20,7 @@ def parse_args():
     parser.add_argument("-d", "--debug", action="store_true",
                         help="enable debugging")
     parser.add_argument("-r", "--repo", "--repository",
-                        help="repository host [hub.docker.com]",
-                        default="hub.docker.com")
+                        help="Docker repository host")
     parser.add_argument("-o", "--owner", "--organization", "--org",
                         help="repository owner [lsstsqre]",
                         default="lsstsqre")
@@ -51,15 +52,19 @@ def parse_args():
     parser.add_argument("--no-scan", action="store_true",
                         help="Do not do repo scan (only useful in" +
                         " conjunction with --list)")
+    cmdstr = ("/bin/sh -c \"echo Prepuller run for $(hostname) complete at" +
+              " $(date)\"")
     parser.add_argument("-c", "--command", help="Command to run when image" +
-                        " is run as prepuller",
-                        default="/opt/lsst/software/jupyterlab/prepuller.sh")
+                        " is run as prepuller [%s]" % cmdstr, default=cmdstr)
     results = parser.parse_args()
     results.path = ("/v2/repositories/" + results.owner + "/" +
                     results.name + "/tags/")
     if results.list:
         results.list = list(set(results.list.split(',')))
+    if results.command:
+        results.command = shlex.split(results.command)
     return results
+
 
 if __name__ == "__main__":
     standalone()

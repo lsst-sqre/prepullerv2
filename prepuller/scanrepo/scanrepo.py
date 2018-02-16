@@ -1,5 +1,3 @@
-"""The spawner is the KubeSpawner, modified to use the options form data.
-"""
 import datetime
 import json
 import logging
@@ -13,7 +11,7 @@ class ScanRepo(object):
        Based on:
        https://github.com/shangteus/py-dockerhub/blob/master/dockerhub.py"""
 
-    host = ''
+    host = 'hub.docker.com'
     path = ''
     owner = ''
     name = ''

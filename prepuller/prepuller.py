@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import time
 from kubernetes import client, config
 from kubernetes.config.config_exception import ConfigException
 from .scanrepo import ScanRepo
@@ -194,7 +195,7 @@ class Prepuller(object):
             self.logger.debug("Running pod %s" % str(pod_spec))
             made_pod = v1.create_namespaced_pod(self.namespace, pod)
             podname = made_pod.metadata.name
-            made_pods.append[podname]
+            made_pods.append(podname)
         self.created_pods = made_pods
 
     def wait_for_pods(self):
@@ -233,4 +234,7 @@ class Prepuller(object):
             done = true
 
     def delete_pods(self):
-        pass
+        v1 = self.client
+        for pod in self.made_pods:
+            v1.delete_namespaced_pod(
+                self.namespace, pod, client.V1DeleteOptions())

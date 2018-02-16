@@ -11,6 +11,8 @@ def standalone():
     prepuller.build_nodelist()
     prepuller.build_pod_specs()
     prepuller.run_pods()
+    prepuller.wait_for_pods()
+    prepuller.delete_pods()
 
 
 def parse_args():

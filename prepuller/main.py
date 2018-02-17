@@ -58,6 +58,9 @@ def parse_args():
               " $(date)\"")
     parser.add_argument("-c", "--command", help="Command to run when image" +
                         " is run as prepuller [%s]" % cmdstr, default=cmdstr)
+    parser.add_argument("--namespace", help="Kubernetes namespace [namespace" +
+                        " of container, or 'default' if not run inside" +
+                        " kubernetes]")
     results = parser.parse_args()
     results.path = ("/v2/repositories/" + results.owner + "/" +
                     results.name + "/tags/")

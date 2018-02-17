@@ -10,7 +10,7 @@ from .scanrepo import ScanRepo
 
 
 class Prepuller(object):
-    """Class for generating and reaping the DaemonSets for the prepuller.
+    """Class for generating and reaping the Pods for the prepuller.
     """
     repo = None
     logger = None
@@ -32,7 +32,9 @@ class Prepuller(object):
                                        "echo Prepuller run for $(hostname)" +
                                        "complete at $(date)."],
                               path="/v2/repositories/lsstsqre/jld-lab/tags/",
-                              no_scan=False)
+                              no_scan=False,
+                              namespace=None
+                              )
     images = []
     nodes = []
     pod_specs = []
@@ -64,6 +66,8 @@ class Prepuller(object):
                 logging.critical(sys.argv[0], " must be run from a system",
                                  " with k8s API access.")
                 raise
+        if self.args.namespace:
+            namespace = self.args.namespace
         if not namespace:
             namespace = os.getenv('JLD_NAMESPACE')
         if not namespace:
@@ -132,6 +136,8 @@ class Prepuller(object):
             self.images = current_imgs
 
     def build_nodelist(self):
+        """Make a list of all schedulable nodes.
+        """
         v1 = self.client
         logger = self.logger
         logger.debug("Getting schedulable node list.")
@@ -180,14 +186,16 @@ class Prepuller(object):
         return iname
 
     def run_pods(self):
-        # We could parallelize this and run it in a thread pool...
+        """Run a pod, with a single container, on a particular node.
+        This has the effect of pulling the image for that pod onto that
+        node.  The run itself is unimportant.
+        """
         v1 = self.client
         made_pods = []
         for pod_spec in self.pod_specs:
             img = pod_spec.containers[0].image
-            imgname = self._extract_podname(img)[:50]
-            restlen = len(imgname)
-            name = "pp-" + imgname + "-" + pod_spec.node_name[-restlen:]
+            imgname = self._extract_podname(img)
+            name = "pp-" + imgname + "-" + pod_spec.node_name.split('-')[-1]
             pod = client.V1Pod(spec=pod_spec,
                                metadata=client.V1ObjectMeta(
                                    name=name)
@@ -204,9 +212,8 @@ class Prepuller(object):
         """
         created_pods = self.created_pods
         v1 = self.client
-        done = False
         failuremap = {}
-        while not done:
+        while True:
             pods = v1.list_namespaced_pod(self.namespace).items
             podmap = {}
             for cpod in created_pods:
@@ -231,10 +238,11 @@ class Prepuller(object):
                 self.logger.debug("Need to keep waiting for pods.")
                 time.sleep(1)
                 continue
-            done = True
+            break
 
     def delete_pods(self):
         v1 = self.client
         for pod in self.created_pods:
+            self.logger.debug("Deleting pod %s" % pod)
             v1.delete_namespaced_pod(
                 pod, self.namespace, client.V1DeleteOptions())

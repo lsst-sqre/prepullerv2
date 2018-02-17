@@ -223,7 +223,7 @@ class Prepuller(object):
                     self.logger.debug("Pod %s in status %s" %
                                       (cpod, podmap[cpod]))
                     break
-                if podmap["cpod"] == "Failed":
+                if podmap[cpod] == "Failed":
                     if cpod not in failuremap:
                         failuremap[cpod] = True
                         self.logger.error("Pod %s failed")
@@ -231,10 +231,10 @@ class Prepuller(object):
                 self.logger.debug("Need to keep waiting for pods.")
                 time.sleep(1)
                 continue
-            done = true
+            done = True
 
     def delete_pods(self):
         v1 = self.client
-        for pod in self.made_pods:
+        for pod in self.created_pods:
             v1.delete_namespaced_pod(
-                self.namespace, pod, client.V1DeleteOptions())
+                pod, self.namespace, client.V1DeleteOptions())

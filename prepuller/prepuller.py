@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import time
+from threading import Thread
 from kubernetes import client, config
 from kubernetes.config.config_exception import ConfigException
 from .scanrepo import ScanRepo
@@ -156,12 +157,14 @@ class Prepuller(object):
         self.nodes = nodes
 
     def build_pod_specs(self):
-        """Build a set of Pod specs from our image list and our node list.
+        """Build a dict of Pod specs by node, each node having a list of
+        specs.
         """
-        specs = []
-        for img in self.images:
-            for node in self.nodes:
-                specs.append(self._build_pod_spec(img, node))
+        specs = {}
+        for node in self.nodes:
+            specs[node] = []
+            for img in self.images:
+                specs[node].append(self._build_pod_spec(img, node))
         self.pod_specs = specs
         self.logger.debug("Specs: %s" % str(self.pod_specs))
 
@@ -185,64 +188,86 @@ class Prepuller(object):
         iname = iname.replace(':', '-')
         return iname
 
-    def run_pods(self):
+    def start_single_pod(self, spec):
         """Run a pod, with a single container, on a particular node.
+        (Assuming that the pod is itself tied to a node in the pod spec.)
         This has the effect of pulling the image for that pod onto that
-        node.  The run itself is unimportant.
+        node.  The run itself is unimportant.  It returns the name of the
+        created pod.
         """
         v1 = self.client
-        made_pods = []
-        for pod_spec in self.pod_specs:
-            img = pod_spec.containers[0].image
-            imgname = self._extract_podname(img)
-            name = "pp-" + imgname + "-" + pod_spec.node_name.split('-')[-1]
-            pod = client.V1Pod(spec=pod_spec,
-                               metadata=client.V1ObjectMeta(
-                                   name=name)
-                               )
-            self.logger.debug("Running pod %s" % str(pod_spec))
-            made_pod = v1.create_namespaced_pod(self.namespace, pod)
-            podname = made_pod.metadata.name
-            made_pods.append(podname)
-        self.created_pods = made_pods
+        img = spec.containers[0].image
+        imgname = self._extract_podname(img)
+        name = "pp-" + imgname + "-" + spec.node_name.split('-')[-1]
+        pod = client.V1Pod(spec=spec,
+                           metadata=client.V1ObjectMeta(
+                               name=name)
+                           )
+        name = spec.containers[0].name
+        self.logger.debug("Running pod %s" % name)
+        made_pod = v1.create_namespaced_pod(self.namespace, pod)
+        podname = made_pod.metadata.name
+        return podname
 
-    def wait_for_pods(self):
-        """Uses created_pods and loops until each of those is in phase
-        "Succeeded" or "Failed".
+    def run_pods(self):
+        """Run pods for all nodes.  Parallelize across nodes.
         """
-        created_pods = self.created_pods
+        tlist = []
+        for node in self.pod_specs:
+            speclist = list(self.pod_specs[node])
+            thd = Thread(target=self.run_pods_for_node, args=(node, speclist))
+            tlist.append(thd)
+            thd.start()
+        # Wait for all threads to return
+        for thd in tlist:
+            self.logger.debug("Wait for thread '%s' to complete" % str(thd))
+            thd.join()
+
+    def run_pods_for_node(self, node, speclist):
+        """Execute pods one at a time, so we don't overwhelm I/O.
+        Execute this method in parallel across all nodes for best
+        results.  Each node should have its own I/O, so they should all be
+        busy at once.
+        """
+        self.logger.debug("Running pods for node %s" % node)
+        for spec in speclist:
+            name = spec.containers[0].name
+            self.logger.debug("Running pod '%s' for node '%s'" % (name,
+                                                                  node))
+            podname = self.start_single_pod(spec)
+            self.wait_for_pod(podname)
+
+    def wait_for_pod(self, podname, delay=1, max_tries=3600):
+        """Wait for a particular pod to go into phase "Succeeded" or
+        "Failed", and then delete the pod.
+        Raise an exception if the delay timer expires.
+        """
         v1 = self.client
-        failuremap = {}
+        namespace = self.namespace
+        tries = 1
         while True:
-            pods = v1.list_namespaced_pod(self.namespace).items
-            podmap = {}
-            for cpod in created_pods:
-                podmap[cpod] = "unknown"
-            for pod in pods:
-                pname = pod.metadata.name
-                if pname not in created_pods:
-                    continue
-                podmap[pname] = pod.status.phase
-            any_still_going = False
-            for cpod in created_pods:
-                if podmap[cpod] not in ["Failed", "Succeeded"]:
-                    any_still_going = True
-                    self.logger.debug("Pod %s in status %s" %
-                                      (cpod, podmap[cpod]))
-                    break
-                if podmap[cpod] == "Failed":
-                    if cpod not in failuremap:
-                        failuremap[cpod] = True
-                        self.logger.error("Pod %s failed")
-            if any_still_going:
-                self.logger.debug("Need to keep waiting for pods.")
-                time.sleep(1)
-                continue
-            break
+            pod = v1.read_namespaced_pod(podname, namespace)
+            phase = pod.status.phase
+            if phase in ["Failed", "Succeeded"]:
+                if phase == "Failed":
+                    self.logger.error("Pod '%s' failed" % podname)
+                self.delete_pod(podname)
+                return
+            if tries >= max_tries:
+                errstr = ("Pod '%s' did not complete after " % podname +
+                          "%d %d s iterations." % (max_tries, delay))
+                self.logger.error(errstr)
+                raise RuntimeError(errstr)
+            pstr = "Wait %d s [%d/%d]for pod '%s' [%s]" % (
+                delay, tries, max_tries, podname, phase)
+            self.logger.debug(pstr)
+            time.sleep(delay)
+            tries = tries + 1
 
-    def delete_pods(self):
+    def delete_pod(self, podname):
+        """Delete a named pod.
+        """
         v1 = self.client
-        for pod in self.created_pods:
-            self.logger.debug("Deleting pod %s" % pod)
-            v1.delete_namespaced_pod(
-                pod, self.namespace, client.V1DeleteOptions())
+        self.logger.debug("Deleting pod %s" % podname)
+        v1.delete_namespaced_pod(
+            podname, self.namespace, client.V1DeleteOptions())

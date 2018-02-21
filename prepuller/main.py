@@ -10,6 +10,7 @@ def standalone():
     prepuller.update_images_from_repo()
     prepuller.build_nodelist()
     prepuller.build_pod_specs()
+    prepuller.clean_completed_pods()
     prepuller.run_pods()
 
 
@@ -56,6 +57,11 @@ def parse_args():
               " $(date)\"")
     parser.add_argument("-c", "--command", help="Command to run when image" +
                         " is run as prepuller [%s]" % cmdstr, default=cmdstr)
+    parser.add_argument("-t", "--timeout",
+                        help=("Seconds allowed for process to complete " +
+                              "(-1 for no timeout) [3300]"),
+                        type=int,
+                        default=3300)
     parser.add_argument("--namespace", help="Kubernetes namespace [namespace" +
                         " of container, or 'default' if not run inside" +
                         " kubernetes]")

@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from threading import Thread
@@ -34,11 +35,12 @@ class Prepuller(object):
                                        "complete at $(date)."],
                               path="/v2/repositories/lsstsqre/jld-lab/tags/",
                               no_scan=False,
-                              namespace=None
+                              namespace=None,
+                              timeout=3300
                               )
     images = []
     nodes = []
-    pod_specs = []
+    pod_specs = {}
     created_pods = []
 
     def __init__(self, args=None):
@@ -64,8 +66,8 @@ class Prepuller(object):
             try:
                 config.load_kube_config()
             except Exception:
-                logging.critical(sys.argv[0], " must be run from a system",
-                                 " with k8s API access.")
+                self.logger.critical(sys.argv[0], " must be run from a system",
+                                     " with k8s API access.")
                 raise
         if self.args.namespace:
             namespace = self.args.namespace
@@ -93,6 +95,16 @@ class Prepuller(object):
         self.images = list(set(self.images))
         if self.images:
             self.images.sort()
+        # Not portable to non-Unixy systems.
+        if self.args.timeout >= 0:
+            self.logger.debug("Setting timeout to %d s." % self.args.timeout)
+            signal.signal(signal.SIGALRM, self._timeout_handler)
+            signal.alarm(self.args.timeout)
+
+    def _timeout_handler(self, signum, frame):
+        self.logger.error(
+            "Did not complete in %d s.  Terminating." % self.args.timeout)
+        raise RuntimeError("Timed out")
 
     def update_images_from_repo(self):
         """Scan the repo looking for images.
@@ -175,7 +187,7 @@ class Prepuller(object):
                     command=self.command,
                     image=img,
                     image_pull_policy="Always",
-                    name=self._extract_podname(img)
+                    name=self._podname_from_image(img)
                 )
             ],
             restart_policy="Never",
@@ -183,10 +195,34 @@ class Prepuller(object):
         )
         return spec
 
-    def _extract_podname(self, img):
+    def _podname_from_image(self, img):
         iname = '-'.join(img.split('/')[-2:])
         iname = iname.replace(':', '-')
         return iname
+
+    def clean_completed_pods(self):
+        """Get a pod list and delete any that are in the speclist and have
+        already run to completion.  This is useful for pods that are
+        left stranded by a timeout.
+        """
+        v1 = self.client
+        self.logger.debug("Looking for completed pods to delete.")
+        cleanup = []
+        speclist = []
+        for x in self.pod_specs:
+            speclist.extend(self.pod_specs[x])
+        specnames = [self._derive_pod_name(x) for x in speclist]
+        podlist = v1.list_namespaced_pod(self.namespace)
+        for pod in podlist.items:
+            podname = pod.metadata.name
+            phase = pod.status.phase
+            if (podname in specnames and
+                    (phase == "Succeeded" or phase == "Failed")):
+                self.logger.debug(
+                    "Pod '%s' %s; adding to cleanup." % (podname, phase))
+                cleanup.append(podname)
+        for podname in cleanup:
+            self.delete_pod(podname)
 
     def start_single_pod(self, spec):
         """Run a pod, with a single container, on a particular node.
@@ -196,9 +232,7 @@ class Prepuller(object):
         created pod.
         """
         v1 = self.client
-        img = spec.containers[0].image
-        imgname = self._extract_podname(img)
-        name = "pp-" + imgname + "-" + spec.node_name.split('-')[-1]
+        name = self._derive_pod_name(spec)
         pod = client.V1Pod(spec=spec,
                            metadata=client.V1ObjectMeta(
                                name=name)
@@ -208,6 +242,12 @@ class Prepuller(object):
         made_pod = v1.create_namespaced_pod(self.namespace, pod)
         podname = made_pod.metadata.name
         return podname
+
+    def _derive_pod_name(self, spec):
+        """Pod name is based on image and node.
+        """
+        return ("pp-" + self._podname_from_image(spec.containers[0].image) +
+                "-" + spec.node_name.split('-')[-1])
 
     def run_pods(self):
         """Run pods for all nodes.  Parallelize across nodes.
@@ -220,7 +260,7 @@ class Prepuller(object):
             thd.start()
         # Wait for all threads to return
         for thd in tlist:
-            self.logger.debug("Wait for thread '%s' to complete" % str(thd))
+            self.logger.debug("Wait for thread '%s' to complete" % thd.name)
             thd.join()
 
     def run_pods_for_node(self, node, speclist):

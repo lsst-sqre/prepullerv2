@@ -10,7 +10,7 @@ DESCRIPTION = 'Prepuller for JupyterLab Demo'
 AUTHOR = 'Adam Thornton'
 AUTHOR_EMAIL = 'athornton@lsst.org'
 URL = 'https://github.com/sqre-lsst/jupyterlabdemo'
-VERSION = '0.0.2'
+VERSION = '0.0.3'
 LICENSE = 'MIT'
 
 
